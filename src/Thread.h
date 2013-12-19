@@ -1,8 +1,11 @@
 #ifndef THREAD_H
 #define THREAD_H
-#include <pthread.h>
 
-class Thread {
+#include <pthread.h>
+#include "CondVar.h"
+
+class Thread : public CondVar {
+	CondVar m_cond;
 public:
     Thread();
     virtual ~Thread();
