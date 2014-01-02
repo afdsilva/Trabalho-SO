@@ -11,6 +11,9 @@ CondVar::CondVar() {
 	m_lock = Mutex();
 	pthread_cond_init(&m_cond, NULL);
 }
+CondVar::CondVar(Mutex & mutex) : m_lock(mutex) {
+	pthread_cond_init(&m_cond, NULL);
+}
 
 CondVar::~CondVar() {
 	pthread_cond_destroy(&m_cond);

@@ -16,6 +16,7 @@ class CondVar {
 
 public:
 	CondVar();
+	CondVar(Mutex & mutex);
 	virtual ~CondVar();
 
 	int wait();

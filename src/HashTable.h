@@ -109,8 +109,8 @@ public:
 		try {
 			if (size % blocks != 0)
 				throw 1;
-			m_Cond = new CondVar[blocks];
 			hashObject<T> nObj;
+			//m_Cond = new CondVar[blocks];
 			table.resize(size,nObj);
 			tableSize = size;
 			hashPrime = proxPrimo(size);
@@ -127,9 +127,8 @@ public:
 		}
 	}
 	virtual ~HashTable() {
+
 	}
-
-
 	hashObject<T> & get(int pos) {
 		return table[pos];
 	}
