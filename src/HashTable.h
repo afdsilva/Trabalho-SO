@@ -16,6 +16,7 @@
 #include <string>
 #include <string.h>
 #include <typeinfo>
+#include <cmath>
 
 #include "Mutex.h"
 #include "CondVar.h"
@@ -33,17 +34,24 @@ public:
 
 	hashObject() {
 		this->key = -1;
-		if (typeid(O) == typeid(std::string) ) {
-			std::cout << "Construtor hashObect" << std::endl;
-		}
+		//this->value = NULL;
 	}
 	hashObject(int key, O value) {
 		this->key = key;
 		this->value = value;
 	}
-	bool operator==(const hashObject & obj) {
-		if (obj.key == this->key && obj.value == this->value) return true;
-		return false;
+	/**
+	 * Compara dois objetos e retorna:
+	 * 0: caso sejam diferentes
+	 * 1: caso sejam iguais, chaves e valores
+	 * 2: caso valores sejam iguais, porem chaves diferentes (quando uma funcao hash eh reaplicada a chave sera diferente)
+	 * 3: caso chaves sejam iguais
+	 **/
+	int operator==(const hashObject & obj) {
+		if (obj.key == this->key && obj.value == this->value) return 1;
+		else if (obj.value == this->value) return 2;
+		else if (obj.key == this->key) return 3;
+		return 0;
 	}
 };
 
@@ -52,7 +60,7 @@ class HashTable {
 private:
 	CondVar * m_Cond;
 
-	std::vector<hashObject<T> > * table;
+	std::vector<hashObject<T> > table;
 
 	int tableSize;
 	int hashPrime;
@@ -60,21 +68,38 @@ private:
 	int hashLoad;
 	int hashRecord;
 
-	int hash(long int value) {
-		return value % tableSize;
-	}
+	int C1;
+	int C2;
+	int colType;
+
 	int hash(T value) {
 		int retorno = 0;
-		if (typeid(value) == typeid(std::string)) {
-			//retorno = std::atoi(value[0]);
-			std::cout << "string :v" << std::endl;
 
-		} else {
-			//retorno = value;
-		}
-		std::cout << "value: " << value;
-		std::cout << std::endl << "retorno: " << retorno << std::endl;
+		string tmp;
+		tmp = value;
+		retorno = (int) tmp[0];
+
 		return retorno % tableSize;
+	}
+	int probingQuadratic(int k, int pos) {
+		int retorno = -1;
+		if (pos > -1) {
+			if (k >= tableSize) return -1;
+			retorno = (pos + (C1 * k) + (int) pow(C2 * k,2)) % tableSize;
+		}
+		return retorno;
+	}
+	int probingLinear(int k, int pos) {
+		int retorno = (pos + (C1 * k)) % tableSize;
+		return retorno;
+	}
+	int proxPrimo(int n) {
+		int retorno = 0;
+		for (int i = n; i >= 2; i--) {
+			if ( n % i == 0) retorno++;
+			if (retorno > 2) return proxPrimo(n-1);
+		}
+		return retorno;
 	}
 public:
 	/**
@@ -85,62 +110,167 @@ public:
 			if (size % blocks != 0)
 				throw 1;
 			m_Cond = new CondVar[blocks];
-			table = new std::vector<hashObject<T> >[size];
+			hashObject<T> nObj;
+			table.resize(size,nObj);
 			tableSize = size;
-			hashPrime = size;
+			hashPrime = proxPrimo(size);
 			hashBlocks = blocks;
 			hashLoad = 0.75;
 			hashRecord = 0;
 
+			colType = 0;
+			C1 = 1;
+			C2 = 2;
 
 		} catch (int e) {
 			std::cout << "Erro HashTable" << std::endl;
 		}
 	}
 	virtual ~HashTable() {
-		delete(table);
-		delete(m_Cond);
 	}
 
-	hashObject<T> get(int pos) {
-		hashObject<T> retorno = new hashObject<T>;
+
+	hashObject<T> & get(int pos) {
+		return table[pos];
+	}
+	void add(T value) {
+		int pos, nPos, k;
 		try {
-			throw 1;
+			pos = hash(value);
+			nPos = pos;
+			hashObject<T> nObj(pos,value);
+
+			if (search(nObj) == 0) {
+				k = 1;
+				while(collision(nPos)) {
+
+					if (colType == 0)
+						nPos = probingLinear(k,pos);
+					else if (colType == 1)
+						nPos = probingQuadratic(k,pos);
+					k++;
+					if (k > tableSize)
+						throw 2;
+				}
+				table[nPos] = nObj;
+			} else {
+				throw 1;
+			}
+			//table[pos] = nObj;
+
 		} catch (int e) {
-			std::cout << "Erro get" << std::endl;
-			return NULL;
+			if (e == 1)
+				std::cout << "Registro ja existe" << std::endl;
+			if (e == 2)
+				std::cout << "Tabela cheia" << std::endl;
+			else
+				std::cout << "Erro add(T value)" << std::endl;
+		}
+	}
+	/**
+	 * Busca na tabela hash o objeto e verifica colisoes
+	 * retorno 0: nao foi encontrado o objeto, valor nao encontrado
+	 * retorno 1: objeto foi encontrado sem colisao, valor e chave iguais
+	 * retorno 2: objeto foi encontrado com colisao, chave diferente
+	 */
+	int search(hashObject<T> & obj) {
+		int pos = obj.key;
+		int nPos = pos;
+		hashObject<T> nObj;
+
+		hashObject<T> tObj = table.at(pos);
+		if ((obj == tObj) == 1) return 1;
+		for (int k = 1; k < tableSize; k++) {
+			if (colType == 0) {
+				//busca linear
+				nPos = probingLinear(k, pos);
+			} else if (colType == 1) {
+				//busca quadratica
+				nPos = probingQuadratic(k, pos);
+			}
+			nObj = table[nPos];
+			if ((nObj == obj) == 2) return 2;
+
+		}
+		return 0;
+	}
+	/**
+	 * Verifica se posicao esta ocupada
+	 * 0: posicao vazia
+	 * 1: jah existe um objeto
+	 * -1: erro
+	 **/
+	int collision(int pos) {
+		int retorno = -1;
+		hashObject<T> tObj = table[pos];
+		if (pos > -1) {
+			retorno = 0;
+			if (tObj.key != -1) retorno = 1;
 		}
 		return retorno;
 	}
-	void add(T value) {
+	/*
+	 * Seta o valor, calculando o hash para posicao
+	 * SOBREPOE o valor anterior, caso exista ignorando colisões.
+	 */
+	void set(T value) {
 		try {
-			hashObject<T> nObj;
-			nObj.key = hash(value);
-			nObj.value = value;
-			this->add(nObj);
+			int pos = hash(value);
+			hashObject<T> nObj(pos,value);
+			if (search(nObj) == 0) {
+				table[pos] = nObj;
+			} else {
+				throw 1;
+			}
+		} catch (int e) {
+			if (e == 1)
+				std::cout << "Registro ja existe" << std::endl;
+			else
+				std::cout << "Erro set(T value, int pos)" << std::endl;
+		}
 
-		} catch (int e) {
-			std::cout << "Erro add(T value)" << std::endl;
-		}
 	}
-	void add(hashObject<T> & value) {
-		try {
-			this->table->insert(value);
-			throw 1;
-		} catch (int e) {
-			std::cout << "Erro add(hashObject<T> value)" << std::endl;
-		}
+	/**
+	 * Sobrepoe a posicao com um objeto vazio
+	 */
+	void remove(int pos) {
+		hashObject<T> nObj;
+		table[pos] = nObj;
 	}
-	bool search(T value) {
-		return false;
-	}
-	void set(int pos);
-	void remove(int pos);
 	void print(int pos) {
-
+		hashObject<T> nObj = table.at(pos);
+		std::cout << pos << ": key = " << nObj.key << " value = " << nObj.value;
+		std::cout << std::endl;
 	}
-	void printall();
+	void printall() {
+		for (int i = 0; i < tableSize; i++) {
+			print(i);
+		}
+	}
 
+	int getC1() const {
+		return C1;
+	}
+
+	void setC1(int c1) {
+		C1 = c1;
+	}
+
+	int getC2() const {
+		return C2;
+	}
+
+	void setC2(int c2) {
+		C2 = c2;
+	}
+
+	int getColType() const {
+		return colType;
+	}
+
+	void setColType(int colType) {
+		this->colType = colType;
+	}
 };
 
 #endif /* HASHTABLE_H_ */
