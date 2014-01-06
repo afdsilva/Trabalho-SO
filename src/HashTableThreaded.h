@@ -26,36 +26,37 @@ public:
 	void printall();
 };
 
-class HashTableAdd : public Thread {
+/**
+ * Classe dummy que servira como container para as outras classes que usam threads
+ */
+template <class T>
+class HashTableAction : public Thread {
+public:
+	HashTableAction() {}
+	virtual void * run() = 0;
+};
+/**
+template <class T>
+class HashTableAdd : public HashTableAction<T> {
 	Mutex & m_mutex;
 	CondVar & m_cond;
-	std::vector<int> & numeros;
+	std::vector<hashObject<T> > & hashtable;
+	hashObject<T> & obj;
 	int pos;
-	int valor;
 public:
-	HashTableAdd(Mutex & mutex,CondVar & cond, std::vector<int> & num,int v,int p) : m_mutex(mutex), m_cond(cond), numeros(num), pos(p), valor(v) {}
+	HashTableAdd(Mutex & mutex,CondVar & cond, std::vector<hashObject<T> > & t,hashObject<T> & o, int p) : m_mutex(mutex), m_cond(cond), hashtable(t), obj(o), pos(p) {}
 	void *run() {
-		if(HashTableThreaded::lock) m_cond.wait();
+		std::cout << "HashTableAdd key: " << obj.key << " value: " << obj.value;
+		std::cout << std::endl;
+		if(lock) m_cond.wait();
 
 		m_mutex.lock();
-		HashTableThreaded::lock = true;
-		numeros[pos] = numeros[pos] + valor;
-		HashTableThreaded::lock = false;
+		lock = true;
+		hashtable[pos] = obj;
+		lock = false;
 		m_mutex.unlock();
-		m_cond.signal();
-		return NULL;
+		m_cond.signal();		return NULL;
 	}
 };
-
-class HashTableDelete : public Thread {
-	CondVar & m_cond;
-	std::vector<int> & numeros;
-	int pos;
-public:
-	HashTableDelete(CondVar & cond, std::vector<int> & num, int p) : m_cond(cond), numeros(num), pos(p) {}
-	void *run() {
-		std::cout << "Deletando" << std::endl;
-		return NULL;
-	}
-};
+**/
 #endif /* HASHTABLETHREADED_H_ */
