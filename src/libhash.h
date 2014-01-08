@@ -1,8 +1,7 @@
 /*
- * HashTable.h
+ * libhash.h
  *
- *  Created on: Dec 18, 2013
- *      Author: andref
+ *      Author: Andre Silva
  */
 
 #ifndef HASHTABLE_H_
@@ -56,7 +55,6 @@ public:
 		return 0;
 	}
 };
-
 template<>
 class hashObject<string> {
 public:
@@ -85,46 +83,71 @@ public:
 		return 0;
 	}
 };
+
 class ThreadList {
+private:
+	Mutex threadMutex;
+	CondVar threadCond;
+
 public:
-	pthread_t * threads;
-	bool * activeThreads;
-	int * retThreads;
-	int nrThreads;
+	std::vector<pthread_t *> threads;
+	int activeThreads;
+	int maxThreads;
 
 	ThreadList(int nr) {
-		nrThreads = nr;
-		threads = new pthread_t[nr];
-		activeThreads = new bool(false);
-		retThreads = new int(0);
+		maxThreads = nr;
+		activeThreads = 0;
+		threadCond = CondVar(threadMutex);
 	}
-	int getInactive() {
+	int create(void *(*__start_routine) (void *), void * __arg) {
 		int retorno = -1;
-		for (int i = 0; i < nrThreads; i++) {
-			if (activeThreads[i] == false) retorno = i;
+		try {
+
+			if (activeThreads >= maxThreads) {
+				//std::cout << "Max threads reached, waiting for a thread being freed" << std::endl;
+				threadCond.wait();
+				//std::cout << "Thread freed" << std::endl;
+			} else {
+				//std::cout << "creating new thread" << std::endl;
+			}
+			pthread_t * thread = new pthread_t();
+			int retorno = pthread_create(thread, NULL, __start_routine,__arg);
+			if (retorno == 0) {
+				threadMutex.lock();
+				activeThreads++;
+				threads.push_back(thread);
+				retorno = threads.size() - 1;
+				threadMutex.unlock();
+
+			} else
+				throw 1;
+
+		} catch (int e) {
+			std::cout << "ERROR: create Thread" << std::endl;
+			retorno = -1;
 		}
-		std::cout << "Thread Inativa: " << retorno << std::endl;
 		return retorno;
 	}
-	void create(void *(*__start_routine) (void *), void * __arg) {
-		int openThread = getInactive();
-		if (openThread != -1) {
-			retThreads[openThread] = pthread_create(&threads[openThread], NULL, __start_routine,__arg);
-			if (retThreads[openThread] == 0) {
-				activeThreads[openThread] = true;
-			}
-			std::cout << "Thread " << openThread << " criada: " << retThreads[openThread] << std::endl;
-		} else {
-			std::cout << "nr threads excedido, operacao nao realizada =D" << std::endl;
-		}
+	void freeThread() {
+		if (activeThreads > 0)
+			activeThreads--;
+		threadCond.signal();
 	}
-	void join(int t) {
-		pthread_join( threads[t], NULL);
-		activeThreads[t] = false;
-		//threads[t] = pthread_t();
+	void join(int pos) {
+		pthread_join(*threads[pos], NULL);
+		//freeThread();
 	}
 	void joinAll() {
-		for (int i = 0; i < nrThreads; i++) join(i);
+		for (int i = 0; i < (int) threads.size(); i++) {
+			join(i);
+		}
+		threads.clear();
+	}
+	Mutex & getThreadMutex() {
+		return threadMutex;
+	}
+	CondVar & getThreadCondVar() {
+		return threadCond;
 	}
 };
 
@@ -138,6 +161,7 @@ private:
 	std::vector<hashObject<T> > table;
 
 	int tableSize;
+	int actualSize;
 	int hashPrime;
 	int hashBlocks;
 	int hashLoad;
@@ -147,6 +171,9 @@ private:
 	int C2;
 	int colType;
 
+	/**
+	 * Funcao hash utilizada, simples
+	 */
 	int hash(T value) {
 		int retorno = 0;
 		if (typeid(T) == typeid(string)) {
@@ -196,6 +223,7 @@ public:
 			threadlist = new ThreadList(threads);
 			table.resize(size,nObj);
 			tableSize = size;
+			actualSize = 0;
 			hashPrime = proxPrimo(size);
 			hashBlocks = blocks;
 			hashLoad = 0.75;
@@ -206,66 +234,76 @@ public:
 			C2 = 2;
 
 		} catch (int e) {
-			std::cout << "Erro HashTable" << std::endl;
+			std::cout << "Nao foi possivel criar a tabela hash, numero de blocos e tamanho da tabela não são multiplos." << std::endl;
 		}
 	}
 	virtual ~HashTable() {
+		//join em todas threads forçando todas threads a terminarem.
 		threadlist->joinAll();
+		for(int i = 0; i < hashBlocks; i++) {
+			//libera todos mutex e variaveis de condicao;
+			aMutex[i].unlock();
+			aCond[i].signal();
+			//libera as variaveis
+			aMutex[i].~Mutex();
+			aCond[i].~CondVar();
+		}
 	}
 	hashObject<T> & get(int pos) {
-		return table[pos];
+		int secao = pos / (tableSize / hashBlocks);
+		aMutex[secao].lock();
+		hashObject<T> & retorno = table[pos];
+		aMutex[secao].unlock();
+		return retorno;
 	}
-	void _add(T value) {
-		int pos, nPos, k;
+
+	bool _add(T value) {
+		int pos;
+		pos = hash(value);
+		hashObject<T> nObj(pos,value);
+		return _add(nObj);
+	}
+	bool _add(hashObject<T> & nObj) {
+		int nPos, k, secao;
 		try {
-			pos = hash(value);
-			nPos = pos;
-			hashObject<T> nObj(pos,value);
+			if (actualSize >= tableSize)
+				throw 2;
+			nPos = nObj.key;
 			if (search(nObj) == 0) {
 				k = 1;
 				while(collision(nPos)) {
 
 					if (colType == 0)
-						nPos = probingLinear(k,pos);
+						nPos = probingLinear(k,nObj.key);
 					else if (colType == 1)
-						nPos = probingQuadratic(k,pos);
+						nPos = probingQuadratic(k,nObj.key);
 					k++;
 					if (k > tableSize)
 						throw 2;
 				}
-				//secao = nPos / (tableSize / hashBlocks);
-				/** Tentativa usando uma classe "java like"
-				HashTableAdd<T> * action = new HashTableAdd<T>(aMutex[secao],aCond[secao],table,nObj,nPos);
-				actions.push_back(action);
-				action->start();
-				action->join();
-				**/
+				secao = nPos / (tableSize / hashBlocks);
+				aMutex[secao].lock();
 				table[nPos] = nObj;
+				aMutex[secao].unlock();
+				actualSize++;
 			} else {
 				throw 1;
 			}
-			//table[pos] = nObj;
+			return true;
 
 		} catch (int e) {
 			if (e == 1)
 				std::cout << "Registro ja existe" << std::endl;
-			if (e == 2)
+			else if (e == 2)
 				std::cout << "Tabela cheia" << std::endl;
 			else
-				std::cout << "Erro add(T value)" << std::endl;
+				std::cout << "Erro _add(hashObject<T> nObj)" << std::endl;
+			return false;
 		}
 	}
-	void add(T value);
-	/**
-	void * addString(void * ptr) {
-		T value;
-		char * tmp = ((char *) ptr);
-		value = tmp;
-		_add(value);
-		return NULL;
 
-	}
-	**/
+	int add(T value);
+	int addString(string value);
 	/**
 	 * Busca na tabela hash o objeto e verifica colisoes
 	 * retorno 0: nao foi encontrado o objeto, valor nao encontrado
@@ -275,10 +313,10 @@ public:
 	int search(hashObject<T> & obj) {
 		int pos = obj.key;
 		int nPos = pos;
-		hashObject<T> nObj;
+		int secao;
+		hashObject<T> nObj = table.at(pos);
 
-		hashObject<T> tObj = table.at(pos);
-		if ((obj == tObj) == 1) return 1;
+		if ((obj == nObj) == 1) return 1;
 		for (int k = 1; k < tableSize; k++) {
 			if (colType == 0) {
 				//busca linear
@@ -287,7 +325,11 @@ public:
 				//busca quadratica
 				nPos = probingQuadratic(k, pos);
 			}
+			secao = nPos / (tableSize / hashBlocks);
+			aMutex[secao].lock();
 			nObj = table[nPos];
+			aMutex[secao].unlock();
+
 			if ((nObj == obj) == 2) return 2;
 
 		}
@@ -301,7 +343,10 @@ public:
 	 **/
 	int collision(int pos) {
 		int retorno = -1;
+		int secao = pos / (tableSize / hashBlocks);
+		aMutex[secao].lock();
 		hashObject<T> tObj = table[pos];
+		aMutex[secao].unlock();
 		if (pos > -1) {
 			retorno = 0;
 			if (tObj.key != -1) retorno = 1;
@@ -312,32 +357,44 @@ public:
 	 * Seta o valor, calculando o hash para posicao
 	 * SOBREPOE o valor anterior, caso exista ignorando colisões.
 	 */
-	void set(T value) {
+	bool _set(T value) {
 		try {
 			int pos = hash(value);
 			hashObject<T> nObj(pos,value);
 			if (search(nObj) == 0) {
+				int secao = pos / (tableSize / hashBlocks);
+				aMutex[secao].lock();
 				table[pos] = nObj;
+				aMutex[secao].unlock();
 			} else {
 				throw 1;
 			}
+			return true;
 		} catch (int e) {
 			if (e == 1)
 				std::cout << "Registro ja existe" << std::endl;
 			else
 				std::cout << "Erro set(T value, int pos)" << std::endl;
+			return false;
 		}
-
 	}
+	int set(T value);
 	/**
 	 * Sobrepoe a posicao com um objeto vazio
 	 */
 	void remove(int pos) {
+		int secao = pos / (tableSize / hashBlocks);
+		aMutex[secao].lock();
 		hashObject<T> nObj;
 		table[pos] = nObj;
+		actualSize--;
+		aMutex[secao].unlock();
 	}
 	void print(int pos) {
+		int secao = pos / (tableSize / hashBlocks);
+		aMutex[secao].lock();
 		hashObject<T> nObj = table.at(pos);
+		aMutex[secao].unlock();
 		std::cout << pos << ": key = " << nObj.key << " value = " << nObj.value;
 		std::cout << std::endl;
 	}
@@ -373,6 +430,12 @@ public:
 	const std::vector<hashObject<T> >& getTable() const {
 		return table;
 	}
+	ThreadList & getThreadList() {
+		return * threadlist;
+	}
+	void joinThread(int pos) {
+		threadlist->join(pos);
+	}
 	void joinThreads() {
 		threadlist->joinAll();
 	}
@@ -387,21 +450,55 @@ public:
 };
 
 template<class T> void * addWrapper(void * ptr);
+template<class T> void * setWrapper(void * ptr);
 
 template<class T>
-void HashTable<T>::add(T value) {
+int HashTable<T>::add(T value) {
+
 	DataWrapper<T> * t = new DataWrapper<T>(value,*this);
-	threadlist->create(addWrapper<T>,(void *) t);
+	return threadlist->create(addWrapper<T>,(void *) t);
+
+}
+
+template<class T>
+int HashTable<T>::addString(string value) {
+
+	DataWrapper<T> * t = new DataWrapper<T>(value,*this);
+	return threadlist->create(addWrapper<T>,(void *) t);
+
+}
+
+template<class T>
+int HashTable<T>::set(T value) {
+
+	DataWrapper<T> * t = new DataWrapper<T>(value,*this);
+	return threadlist->create(setWrapper<T>,(void *) t);
+
 }
 
 template<class T>
 void * addWrapper(void * ptr) {
-
 	DataWrapper<T> dt = *((DataWrapper<T> *) ptr);
 	HashTable<T> & hashTable = dt.ht;
+
 	T value = dt.value;
 	hashTable._add(value);
 
+	ThreadList & threadlist = hashTable.getThreadList();
+	threadlist.freeThread();
+	return NULL;
+}
+
+template<class T>
+void * setWrapper(void * ptr) {
+	DataWrapper<T> dt = *((DataWrapper<T> *) ptr);
+	HashTable<T> & hashTable = dt.ht;
+
+	T value = dt.value;
+	hashTable._set(value);
+
+	ThreadList & threadlist = hashTable.getThreadList();
+	threadlist.freeThread();
 	return NULL;
 }
 
