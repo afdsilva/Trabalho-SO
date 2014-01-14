@@ -1,12 +1,13 @@
 Trabalho-SO
 ===========
 
-Trabalho 1 SO - UFPel 2013/2
+Trabalho 1 SO - UFPel 2014
 
 Implementação Tabela Hash concorrente:
 
-André Felipe da Silva
+André Felipe da Silva - 11107587
 afdsilva@inf.ufpel.edu.br
+Ciencia da Computação
 
 Sistemas Operacionais - Prof. Maurício Lima Pilla
 
